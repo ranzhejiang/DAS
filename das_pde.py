@@ -10,7 +10,7 @@ import pde_model
 
 import os
 import shutil
-
+import time
 
 
 def gen_train_data(n_dim, n_sample, probsetup):
@@ -449,16 +449,24 @@ class DAS():
                 self.pdf_model.WLU_data_initialization()
             self.pdf_model.actnorm_data_initialization()
 
+            solve_pde_time = 0
+            solve_flow_time = 0
             for i in range(1, max_stage+1):
 
+                solve_pde_start = time.time()
                 u_pred, tol_pde, res_var = self.solve_pde(train_dataset_pde, i, sample_valid, u_true)
+                solve_pde_end = time.time()
+                solve_pde_time += (solve_pde_end - solve_pde_start)/3600
                 if tol_pde < args.tol and res_var < args.tol and i > 1:
                     print('===== stoppping criterion satisfies, finish training =====')
                     break
 
                 if i < max_stage:
 
+                    solve_flow_start = time.time()
                     self.solve_flow(train_dataset_flow, i)
+                    solve_flow_end = time.time()
+                    solve_flow_time += (solve_flow_end - solve_flow_start)/3600
                     # resample contains two parts: data points in domain and boundary data
                     x_new = self.resample()
 
@@ -498,6 +506,8 @@ class DAS():
                     # save resample data points every stage
                     x_resample_stg = x_new[:, :args.n_dim]
                     np.savetxt(os.path.join(args.data_dir, 'stage_{}_resample.dat'.format(i)), x_resample_stg)
+            print('solve_pde_time is {:.4} hours'.format(solve_pde_time))
+            print('solve_flow_time time is {:.8} hours'.format(solve_flow_time))
 
 
             # save data for visualization after training
