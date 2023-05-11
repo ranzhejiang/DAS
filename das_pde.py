@@ -3,33 +3,17 @@ import tensorflow as tf
 import numpy as np
 from tensorflow.keras import layers
 
-# import BR_lib.BR_model as BR_model
 import BR_lib.BR_data as BR_data
-# import nn_model 
 import pde_model
 
 import os
 import shutil
 import time
 
-# from __future__ import absolute_import, division, print_function, unicode_literals
-import tensorflow as tf
-
 from tensorflow.keras import layers
-
-#import numpy as np
-# default initializer
-#def default_initializer(std=0.05):
-#    return tf.random_normal_initializer(0., std)
-# def nn_initializer():
-#     return tf.keras.initializers.GlorotNormal(seed=8)
 
 def nn_initializer():
     return tf.keras.initializers.GlorotUniform(seed=8)
-
-# def nn_initializer():
-#      return tf.keras.initializers.GlorotNormal(seed=8)
-
 
 def sin_act(x):
     """
@@ -91,14 +75,6 @@ class FCNN(tf.keras.Model):
         x = self.l_f(x)
 
         return x
-
-
-# Other architecture by invsitigating the underlying structure of PDEs 
-## TODO
-
-
-
-
 
 def gen_train_data(n_dim, n_sample, probsetup):
     """
@@ -220,82 +196,12 @@ class DAS():
         self.ckpt = tf.train.Checkpoint(step=tf.Variable(1), optimizer=self.pde_optimizer, net=self.net_u)
         self.manager = tf.train.CheckpointManager(self.ckpt, args.ckpts_dir, max_to_keep=5)
 
-
-    # def build_flow(self):
-    #     args = self.args
-    #     # build the PDF model
-
-    #     # enlarge the computation domain slightly
-    #     xlb = -args.bd - 0.01
-    #     xhb = args.bd + 0.01
-
-    #     pdf_model = BR_model.IM_rNVP_KR_CDF('pdf_model_rNVP_KR_CDF',
-    #                                         args.n_dim,
-    #                                         xlb, xhb,
-    #                                         args.n_step,
-    #                                         args.n_depth,
-    #                                         n_width=args.n_width,
-    #                                         shrink_rate=args.shrink_rate,
-    #                                         flow_coupling=args.flow_coupling,
-    #                                         n_bins=args.n_bins4cdf,
-    #                                         rotation=args.rotation,
-    #                                         bounded_supp=args.bounded_supp)
-
-    #     self.pdf_model = pdf_model
-
-
     def build_nn(self):
         args = self.args
         # create a neural network to approximate the solution of PDEs
         net_u = FCNN('FCNN', 1, args.netu_depth, args.n_hidden, args.activation)
 
         self.net_u = net_u 
-
-
-    # def resample(self):
-    #     """
-    #     resample from the trained flow model corresponding to mesh refinement in FEM
-    #     This function will be excuted when residual loss of PDE is greater than a tolerance
-
-    #     There are two strategies for resample. 
-    #     The first one is to replace the current data points by samples generated from the flow model.
-    #     The second one is that we add new samples generated from the flow model to the current set.
-
-    #     Both of them need to sample n_train data points, so there is no difference for resample function, 
-    #     but one should take this into account in the train function
-    #     """
-    #     args = self.args
-    #     n_resample = args.n_train
-    #     projection_operator = BR_data.projection_onto_infunitball
-
-    #     x_prior = self.pdf_model.draw_samples_from_prior(n_resample, args.n_dim)
-    #     x_candidate = self.pdf_model.mapping_from_prior(x_prior).numpy()
-
-    #     # Since samples from the flow model may be out of boundary, one should do a projection
-    #     # resample contains boundary data
-    #     x_resample, x_bd = projection_operator(x_candidate)
-    #     nv_sample = x_resample.shape[0]
-    #     while nv_sample < n_resample:
-    #         n_diff = n_resample - nv_sample
-    #         x_prior_new = self.pdf_model.draw_samples_from_prior(n_diff, args.n_dim)
-    #         x_candidate_new = self.pdf_model.mapping_from_prior(x_prior_new).numpy()
-    #         x_candidate_new, _ = projection_operator(x_candidate_new)
-    #         x_resample = np.concatenate((x_resample, x_candidate_new), axis=0)
-    #         #x_bd = np.concatenate((x_bd, x_bd_new), axis=0)
-    #         nv_sample = x_resample.shape[0]
-
-    #     if x_bd.shape[0] < x_resample.shape[0]:
-    #         n_add = x_resample.shape[0] - x_bd.shape[0]
-    #         _, x_bd_add = gen_train_data(args.n_dim, n_add, args.probsetup)
-    #         x_bd = np.concatenate((x_bd, x_bd_add), axis=0)
-    #     else:
-    #         n_s = x_resample.shape[0]
-    #         x_bd = x_bd[:n_s,:]
-
-    #     #return x_add
-    #     x_new = np.concatenate((x_resample, x_bd), axis=1)
-    #     return x_new
-
 
     def get_pde_loss(self, x, x_boundary, stage_idx):
         args = self.args
@@ -349,49 +255,6 @@ class DAS():
 
         return pde_loss, residual
 
-
-    # def get_pdf(self, x):
-    #     log_pdfx = self.pdf_model(x)
-    #     pdfx = tf.math.exp(log_pdfx)
-    #     return pdfx
-
-
-    # def get_entropy_loss(self, quantity, pre_pdf, x):
-    #     log_pdf = tf.clip_by_value(self.pdf_model(x), -23.02585, 5.0)
-
-    #     # scaling for numerical stability
-    #     scaling = 1000.0
-    #     pre_pdf = scaling*pre_pdf
-    #     quantity = scaling*quantity
-
-    #     # importance sampling
-    #     ratio = tf.math.divide(quantity, pre_pdf)
-    #     res_time_logpdf = ratio*log_pdf
-    #     entropy_loss = -tf.reduce_mean(res_time_logpdf)
-    #     return entropy_loss
-
-
-    # @tf.function
-    # def get_slope(self, x):
-    #     """
-    #     compute slope for nn
-    #     """
-    #     with tf.GradientTape() as tape:
-    #         unn = self.net_u(x)
-    #         grads = pde_model.compute_grads(unn, x)
-    #         slopes = tf.reduce_sum(tf.math.square(grads), axis=1, keepdims=True) 
-
-    #     return slopes
-
-
-    # @tf.function
-    # def residual_for_flow(self, inputs, inputs_boundary, stage_idx):
-    #     with tf.GradientTape() as tape:
-    #         pde_loss, residual = self.get_pde_loss(inputs, inputs_boundary, stage_idx)
-
-    #     return residual
-
-
     @tf.function
     def train_pde(self, inputs, inputs_boundary, i, net_u_training_vars):
         # two neural networks: one for approximating PDE, and another for adaptive sampling
@@ -401,18 +264,6 @@ class DAS():
         grads_net_u = pde_tape.gradient(pde_loss, net_u_training_vars)
         self.pde_optimizer.apply_gradients(zip(grads_net_u, net_u_training_vars))
         return pde_loss, residual
-
-
-    # @tf.function
-    # def train_flow(self, inputs, quantity, pre_pdf, pdf_training_vars):
-    #     # two neural networks: one for approximating PDE, and another for adaptive sampling
-    #     with tf.GradientTape() as ce_tape:
-    #         entropy_loss = self.get_entropy_loss(quantity, pre_pdf, inputs)
-
-    #     grads_pdf_model = ce_tape.gradient(entropy_loss, pdf_training_vars)
-    #     self.flow_optimizer.apply_gradients(zip(grads_pdf_model, pdf_training_vars))
-    #     return entropy_loss
-
 
     def solve_pde(self, train_dataset, stage_idx, sample_valid, u_true):
         """train a neural network to approximate the pde solution"""
@@ -458,43 +309,6 @@ class DAS():
 
         return u_pred, tol_pde, res_var
 
-
-    # def solve_flow(self, train_dataset, i):
-    #     args = self.args
-    #     flow_epochs = args.flow_epochs
-    #     for k in tf.range(1, flow_epochs+1):
-    #         for step, batch_x in enumerate(train_dataset):
-    #             if i == 1:
-    #                 batch_x_data = batch_x
-    #             else:
-    #                 # extract data points and its pdf value for i > 1
-    #                 batch_x_data = batch_x[:, :args.n_dim]
-    #                 batch_pre_pdf = tf.reshape(batch_x[:, -1], [-1,1])
-    #             # generate boundary data only for quantity computation
-    #             _, batch_boundary = gen_train_data(args.n_dim, args.flow_batch_size, args.probsetup)
-    #             # using slopes or residual for adaptivity
-    #             if args.quantity_type == 'slope':
-    #                 quantity = self.get_slope(batch_x_data)
-    #                 quantity = args.scale_quantity * quantity
-    #             else:
-    #                 quantity = self.residual_for_flow(batch_x_data, batch_boundary, i)
-    #                 quantity = args.scale_quantity * quantity
-    #             if i == 1:
-    #                 pre_pdf = tf.ones_like(quantity, dtype=tf.float32)
-    #                 entropy_loss = self.train_flow(batch_x_data, quantity, pre_pdf, self.pdf_model.trainable_weights)
-    #                 quantity_loss = tf.reduce_mean(quantity)
-    #                 print('stage: %s, flow_epoch: %s, iter: %s, quantity: %s, entropy_loss: %s ' % 
-    #                       (i, k.numpy(), step+1, quantity_loss.numpy(), entropy_loss.numpy()))
-    #             else:
-    #                 # pdf values from the previous model are precomputed
-    #                 entropy_loss = self.train_flow(batch_x_data, quantity, batch_pre_pdf, self.pdf_model.trainable_weights)
-    #                 quantity_loss = tf.reduce_mean(quantity)
-    #                 print('stage: %s, flow_epoch: %s, iter: %s, quantity: %s, entropy_loss: %s ' % 
-    #                       (i, k.numpy(), step+1, quantity_loss.numpy(), entropy_loss.numpy()))
-
-    #             self.entropyloss_vs_iter += [entropy_loss.numpy()]
-
-
     def train(self):
         """training procedure"""
         args = self.args
@@ -525,16 +339,11 @@ class DAS():
             train_dataset_pde = data_flow_pde.get_shuffled_batched_dataset()
 
             data_flow_kr = BR_data.dataflow(x_data, buffersize=args.n_train, batchsize=args.flow_batch_size)
-            # train_dataset_flow = data_flow_kr.get_shuffled_batched_dataset()
 
             m = 1
             x_init_kr = data_flow_kr.get_n_batch_from_shuffled_batched_dataset(m)
             # pass data to networks to complete building process
             self.net_u(x_init_kr)
-            # self.pdf_model(x_init_kr)
-            # if args.rotation:
-            #     self.pdf_model.WLU_data_initialization()
-            # self.pdf_model.actnorm_data_initialization()
 
             solve_pde_time = 0
             solve_flow_time = 0
@@ -547,67 +356,6 @@ class DAS():
                 if tol_pde < args.tol and res_var < args.tol and i > 1:
                     print('===== stoppping criterion satisfies, finish training =====')
                     break
-
-                # if i < max_stage:
-
-                #     solve_flow_start = time.time()
-                #     self.solve_flow(train_dataset_flow, i)
-                #     solve_flow_end = time.time()
-                #     solve_flow_time += (solve_flow_end - solve_flow_start)/3600
-                #     # resample contains two parts: data points in domain and boundary data
-                #     x_new = self.resample()
-
-                    # two strategies: replace all samples or add new samples
-                    # if args.replace_all == 1:
-                    #     # replace all samples
-                    #     buffersize = x_new.shape[0]
-                    #     data_flow_pde = BR_data.dataflow(x_new, buffersize=buffersize, batchsize=args.batch_size)
-                    #     train_dataset_pde = data_flow_pde.get_shuffled_batched_dataset()
-
-                    #     x_prior = self.pdf_model.draw_samples_from_prior(buffersize, args.n_dim)
-                    #     x_flow = self.pdf_model.mapping_from_prior(x_prior).numpy()
-
-                    #     pre_pdf = tf.clip_by_value(self.get_pdf(x_flow), 1.0e-10, 148.4131)
-                    #     pre_pdf = tf.stop_gradient(pre_pdf)
-                    #     x_flow = np.concatenate((x_flow, pre_pdf), axis=1)
-                    #     data_flow_kr = BR_data.dataflow(x_flow, buffersize=buffersize, batchsize=args.flow_batch_size)
-                    #     train_dataset_flow = data_flow_kr.get_shuffled_batched_dataset()
-
-                    # else:
-                    #     # add new samples to the current set
-                    #     x = np.concatenate((x, x_new), axis=0)
-                    #     buffersize = x.shape[0]
-
-                    #     # refine data points for the next stage
-                    #     data_flow_pde = BR_data.dataflow(x, buffersize=buffersize, batchsize=args.batch_size)
-                    #     train_dataset_pde = data_flow_pde.get_shuffled_batched_dataset()
-
-                    #     x_prior = self.pdf_model.draw_samples_from_prior(x.shape[0], args.n_dim)
-                    #     x_flow = self.pdf_model.mapping_from_prior(x_prior).numpy()
-
-                    #     pre_pdf = tf.clip_by_value(self.get_pdf(x_flow), 1.0e-10, 148.4131)
-                    #     pre_pdf = tf.stop_gradient(pre_pdf)
-                    #     x_flow = np.concatenate((x_flow, pre_pdf), axis=1)
-                    #     data_flow_kr = BR_data.dataflow(x_flow, buffersize=args.n_train, batchsize=args.flow_batch_size)
-                    #     train_dataset_flow = data_flow_kr.get_shuffled_batched_dataset()
-                    # # save resample data points every stage
-                    # x_resample_stg = x_new[:, :args.n_dim]
-                    # np.savetxt(os.path.join(args.data_dir, 'stage_{}_resample.dat'.format(i)), x_resample_stg)
             print('solve_pde_time is {:.4} hours'.format(solve_pde_time))
             print('solve_flow_time time is {:.8} hours'.format(solve_flow_time))
-
-
-            # # save data for visualization after training
-            # np.savetxt(os.path.join(args.data_dir, 'pdeloss_vs_iter.dat'), np.array(self.pdeloss_vs_iter))
-
-            # np.savetxt(os.path.join(args.data_dir, 'residualloss_vs_iter.dat'), np.array(self.residualloss_vs_iter))
-            # validation_error = np.array(self.approximate_error_vs_iter).reshape(-1,1)
-            # np.savetxt(os.path.join(args.data_dir, 'validation_error.dat'), validation_error)
-
-            # # save u_true and u_pred on the validation set
-            # np.savetxt(os.path.join(args.data_dir, 'u_true.dat'), u_true)
-            # np.savetxt(os.path.join(args.data_dir, 'u_pred.dat'), u_pred)
-            # if args.max_stage > 1:
-            #     np.savetxt(os.path.join(args.data_dir, 'entropyloss_vs_iter.dat'), np.array(self.entropyloss_vs_iter))
-
 
