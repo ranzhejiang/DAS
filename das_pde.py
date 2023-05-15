@@ -3,25 +3,45 @@ import tensorflow as tf
 import numpy as np
 from tensorflow.keras import layers
 
-import BR_lib.BR_data as BR_data
-import pde_model
-
 import os
 import shutil
 import time
 
-from tensorflow.keras import layers
+class dataflow(object):
+    def __init__(self, x, buffersize, batchsize, y=None):
+        self.x = x
+        self.y = y
+        self.buffersize = buffersize
+        self.batchsize = batchsize
 
-def nn_initializer():
-    return tf.keras.initializers.GlorotUniform(seed=8)
+        if y is not None:
+            dx = tf.data.Dataset.from_tensor_slices(x)
+            dy = tf.data.Dataset.from_tensor_slices(y)
+            self.dataset = tf.data.Dataset.zip((dx, dy))
+        else:
+            self.dataset = tf.data.Dataset.from_tensor_slices(x)
 
-def sin_act(x):
-    """
-    Sine activation function
-    """
-    return tf.math.sin(x)
+        self.shuffled_batched_dataset = self.dataset.shuffle(buffersize).batch(batchsize)
 
+    def get_shuffled_batched_dataset(self):
+        return self.shuffled_batched_dataset
 
+    def update_shuffled_batched_dataset(self):
+        self.shuffled_batched_dataset = self.dataset.shuffle(self.buffersize).batch(self.batchsize)
+        return self.shuffled_batched_dataset
+
+    def get_n_batch_from_shuffled_batched_dataset(self, n):
+        it = iter(self.shuffled_batched_dataset)
+        xs = []
+        for i in range(n):
+            x = next(it)
+            if isinstance(x, tuple):
+              xs.append(x[0])
+            else:
+              xs.append(x)
+        x = tf.concat(xs, 0)
+
+        return x
 
 # Basic operation for neural networks: linear layers
 class Linear(layers.Layer):
@@ -44,8 +64,6 @@ class Linear(layers.Layer):
     def call(self, inputs):
         return tf.matmul(inputs, self.w) + self.b
 
-
-
 # Fully connected neural networks
 class FCNN(tf.keras.Model):
     def __init__(self, name, n_out, depth, n_hidden, act='tanh', **kwargs):
@@ -58,7 +76,6 @@ class FCNN(tf.keras.Model):
         for i in range(depth):
             self.hidden_layers.append(Linear(str(i), n_hidden))
         self.l_f = Linear('last',n_out)
-
 
     def call(self, inputs):
         x = inputs
@@ -76,92 +93,122 @@ class FCNN(tf.keras.Model):
 
         return x
 
+def nn_initializer():
+    return tf.keras.initializers.GlorotUniform(seed=8)
+
+def sin_act(x):
+    return tf.math.sin(x)
+
+def gen_square_domain(ndim, n_train, bd=1.0, unitcube=False, hyperuniform=False):
+    # subfunction: generate samples uniformly at random in a ball
+    def gen_nd_ball(n_sample, n_dim):
+        x_g = np.random.randn(n_sample, n_dim)
+        u_number = np.random.rand(n_sample, 1)
+        x_normalized = x_g / np.sqrt(np.sum(x_g**2, axis=1, keepdims=True))
+        x_sample = (u_number**(1/n_dim) * x_normalized).astype(np.float32)
+        return x_sample
+
+    if not unitcube:
+        # if hyperuniform, half data points drawn from a unit ball and half from uniform distribution
+        if hyperuniform:
+            n_corner = n_train//2
+            n_circle = n_train - n_corner
+            # generate samples uniformly at random from a unit ball
+            x_circle = gen_nd_ball(n_circle, ndim)
+            # most of these samples are lies in the corner of a hypercube
+            x_corner = np.random.uniform(-bd, bd, [n_corner, ndim]).astype(np.float32)
+            x = np.concatenate((x_circle, x_corner), axis=0)
+        else:
+            x = np.random.uniform(-bd, bd, [n_train, ndim]).astype(np.float32)
+    else:
+        x = np.random.uniform(0, 1, [n_train, ndim]).astype(np.float32)
+    return x
+
+def gen_nd_cube_boundary(ndim, n_train, unitcube=False):
+    if not unitcube:
+        x = np.random.randn(n_train, ndim).astype(np.float32)
+        x = (x.T / np.max(np.abs(x), axis=1)).T
+    # [0,1]^d unit cube
+    else:
+        x = np.random.randn(n_train, ndim).astype(np.float32)
+        x = (x.T / np.max(np.abs(x), axis=1)).T
+        x = 0.5*x + 0.5
+    return x
+
 def gen_train_data(n_dim, n_sample, probsetup):
-    """
-    generate training data for the first stage
-    Args:
-    -----
-        n_dim: dimension
-        n_sample: number of samples
-        probsetup: type of problems, see das_train.py file 
-
-    Returns:
-    --------
-        x, x_boundary
-        data points for training, including interior data points and boundary data points
-    """
-    if probsetup == 3:
-        x = BR_data.gen_square_domain(n_dim, n_sample)
-        x_boundary = BR_data.gen_square_domain_boundary(n_dim, n_sample)
-
-    elif probsetup == 6:
-        x = BR_data.gen_square_domain(n_dim, n_sample)
-        x_boundary = BR_data.gen_nd_cube_boundary(n_dim, n_sample)
-
-    elif probsetup == 7:
-        x = BR_data.gen_square_domain(n_dim, n_sample)
-        x_boundary = BR_data.gen_square_domain_boundary(n_dim, n_sample)
-
+    if probsetup == 6:
+        x = gen_square_domain(n_dim, n_sample)
+        x_boundary = gen_nd_cube_boundary(n_dim, n_sample)
     else:
         raise ValueError('probsetup is not valid')
 
     return x, x_boundary
 
+# exponential minus square norm function
+def diffusion_exp(x):
+    x_sum_square = np.sum(x**2, axis=1, keepdims=True)
+    ux = np.exp(-10.0*x_sum_square)
+    return ux
+
+def diffusion_exp_boundary(x_boundary):
+    x_sum_square = tf.reduce_sum(tf.math.square(x_boundary), axis=1, keepdims=True)
+    u_boundary = tf.math.exp(-10.0*x_sum_square)
+    return u_boundary
+
+def boundary_loss_exp(model, x_boundary):
+    fx_boundary = model(x_boundary)
+    u_boundary = diffusion_exp_boundary(x_boundary)
+    residual_boundary = tf.math.square(fx_boundary-u_boundary)
+    return residual_boundary
+
+def a_diff_v1(x):
+    a = tf.ones([x.shape[0], 1], dtype=tf.float32)
+    return a 
+
+def compute_grads(f_out, x_inputs):
+    grads = tf.gradients(f_out, [x_inputs])[0]
+    return grads
+
+def compute_div(f_out, x_inputs):
+    div_qx = tf.stack([tf.gradients(tmp, [x_inputs])[0][:, idx] for idx, tmp in enumerate(tf.unstack(f_out, axis=1))], axis=1)
+    div_qx = tf.reduce_sum(div_qx, axis=1, keepdims=True)
+    return div_qx
+
+def f_source_exp(x):
+    n_dim = x.shape[-1]
+    x_sum_square = tf.reduce_sum(tf.math.square(x), axis=1, keepdims=True)
+    f_source = tf.math.exp(-10.0*x_sum_square) * (20.0*n_dim - 400.0*x_sum_square)
+    return f_source
+
+def residual_exp(model, x):
+    fx = model(x)
+    # constant coefficient function
+    a_coeff = a_diff_v1(x)
+    grads = compute_grads(fx, x)
+    qx = a_coeff * grads
+    # compute divergence 
+    div_qx = compute_div(qx, x)
+
+    f_source = f_source_exp(x)
+    residual = tf.math.square(-div_qx - f_source)
+
+    return residual
 
 def load_valid_data(n_dim, probsetup):
-    """
-    load validation data for performance evaluation
-    Args:
-    -----
-        n_dim: data dimension
-        probsetup: type of problems
-
-    Returns:
-    --------
-        true function values at the validation set, numpy format
-    """
-    if probsetup == 3:
-        valid_dir = os.path.join('./dataset_for_validation', '{}d_square_problem.dat'.format(n_dim))
-        sample_valid = np.loadtxt(valid_dir).astype(np.float32)
-        u_true = pde_model.diffusion_peak(sample_valid)
-
-    elif probsetup == 6:
+    if probsetup == 6:
         valid_dir = os.path.join('./dataset_for_validation', '{}d_exp_problem.dat'.format(n_dim))
         sample_valid = np.loadtxt(valid_dir).astype(np.float32)
-        u_true = pde_model.diffusion_exp(sample_valid)
-
-    elif probsetup == 7:
-        valid_dir = os.path.join('./dataset_for_validation', '{}d_square_problem.dat'.format(n_dim))
-        sample_valid = np.loadtxt(valid_dir).astype(np.float32)
-        u_true = pde_model.bimodal_exact(sample_valid)
-
+        u_true = diffusion_exp(sample_valid)
     else:
         raise ValueError('probsetp is not valid')
 
     return sample_valid, u_true
 
-
-
 class DAS():
-    """
-    Deep adaptive sampling (DAS) for partial differential  equations
-    ------------------------------------------------------------------------------------
-    Here is the deep adaptive sampling method to solve partial differential equations. 
-    Solving PDEs using deep nueral networks needs to compute a loss function with sample generation. 
-    In general, uniform samples are generated, but it is not an optimal choice to efficiently train models. 
-    However, flow-based generative models provide an opportunity for efficient sampling, and this is exactly what DAS 
-    does. 
-    
-    Args:
-    -----
-        args: input parameters
-    """
     def __init__(self, args):
         self.args = args
         self._set()
         self.build_nn()
-        # self.build_flow()
-        self._restore()
  
 
     def _set(self):
@@ -190,12 +237,6 @@ class DAS():
         self.approximate_error_vs_iter = []
         self.resvar_vs_iter = []
 
-
-    def _restore(self):
-        args = self.args
-        self.ckpt = tf.train.Checkpoint(step=tf.Variable(1), optimizer=self.pde_optimizer, net=self.net_u)
-        self.manager = tf.train.CheckpointManager(self.ckpt, args.ckpts_dir, max_to_keep=5)
-
     def build_nn(self):
         args = self.args
         # create a neural network to approximate the solution of PDEs
@@ -206,53 +247,13 @@ class DAS():
     def get_pde_loss(self, x, x_boundary, stage_idx):
         args = self.args
 
-        if args.probsetup == 3:
-            residual = pde_model.residual_peak(self.net_u, x)
-            residual_boundary = pde_model.boundary_loss_peak(self.net_u, x_boundary)
-
-        elif args.probsetup == 6:
-            residual = pde_model.residual_exp(self.net_u, x)
-            residual_boundary = pde_model.boundary_loss_exp(self.net_u, x_boundary)
-
-        elif args.probsetup == 7:
-            residual = pde_model.residual_bimodal(self.net_u, x)
-            residual_boundary = pde_model.boundary_loss_bimodal(self.net_u, x_boundary)
-
+        if args.probsetup == 6:
+            residual = residual_exp(self.net_u, x)
+            residual_boundary = boundary_loss_exp(self.net_u, x_boundary)
         else:
             raise ValueError('probsetup is not valid')
 
-        # When replace_all = 0, DAS-G; DAS-R, else
-        # importance sampling may be used if replace all samples
-        if stage_idx == 1:
-            pde_loss = tf.reduce_mean(residual) + args.lambda_bd*tf.reduce_mean(residual_boundary)
-
-        else:
-
-            if args.replace_all == 1:
-                # importance sampling for computing residual
-                # scaling to avoid numerical underflow issues
-                if args.if_IS_residual == 0:
-                    pde_loss = tf.reduce_mean(residual) + args.lambda_bd*tf.reduce_mean(residual_boundary)
-                else:
-                    scaling = 1000.0
-                    log_pdf = tf.clip_by_value(self.pdf_model(x), -23.02585, 5.0)
-                    pdfx = tf.math.exp(log_pdf)
-                    weight_residual = tf.math.divide(scaling*residual, scaling*pdfx)
-                    pde_loss = tf.reduce_mean(weight_residual) + args.lambda_bd*tf.reduce_mean(residual_boundary)
-
-            else:
-                if args.if_IS_residual == 0:
-                    pde_loss = tf.reduce_mean(residual) + args.lambda_bd*tf.reduce_mean(residual_boundary)
-
-                else:
-                    # importance sampling for computing residual
-                    # scaling to avoid numerical underflow issues
-                    scaling = 1000.0
-                    log_pdf = tf.clip_by_value(self.pdf_model(x), -23.02585, 5.0)
-                    pdfx = tf.math.exp(log_pdf)
-                    weight_residual = tf.math.divide(scaling*residual, scaling*pdfx)
-                    pde_loss = tf.reduce_mean(weight_residual) + args.lambda_bd*tf.reduce_mean(residual_boundary)
-
+        pde_loss = tf.reduce_mean(residual) + args.lambda_bd*tf.reduce_mean(residual_boundary)
         return pde_loss, residual
 
     @tf.function
@@ -297,11 +298,6 @@ class DAS():
 
                 self.approximate_error_vs_iter += [approximate_error.numpy()]
                 #####################################################
-            # Save model
-            self.ckpt.step.assign_add(1)
-            if int(self.ckpt.step) % args.ckpt_step == 0:
-                save_path = self.manager.save()
-                print("Saved checkpoint for step {}: {}".format(int(self.ckpt.step), save_path))
 
         # record the final five steps for the stopping criterion
         tol_pde = np.mean(np.array(self.pdeloss_vs_iter[-5:]))
@@ -314,11 +310,8 @@ class DAS():
         args = self.args
         max_stage = args.max_stage
 
-        #################################################
-        #load test data for evaluating model
         sample_valid, u_true = load_valid_data(args.n_dim, args.probsetup)
 
-        # summary
         summary_writer = tf.summary.create_file_writer(args.summary_dir)
 
         print(' Quantity type for adaptive procedure: %s' % (args.quantity_type))
@@ -329,16 +322,15 @@ class DAS():
             # set random seed
             np.random.seed(23)
             tf.random.set_seed(23)
-            # In the first step, data points are generated uniformly since there is no prior information 
 
             # starting from uniform distribution
             x_data, x_boundary = gen_train_data(args.n_dim, args.n_train, args.probsetup)
             x = np.concatenate((x_data, x_boundary), axis=1)
 
-            data_flow_pde = BR_data.dataflow(x, buffersize=args.n_train, batchsize=args.batch_size)
+            data_flow_pde = dataflow(x, buffersize=args.n_train, batchsize=args.batch_size)
             train_dataset_pde = data_flow_pde.get_shuffled_batched_dataset()
 
-            data_flow_kr = BR_data.dataflow(x_data, buffersize=args.n_train, batchsize=args.flow_batch_size)
+            data_flow_kr = dataflow(x_data, buffersize=args.n_train, batchsize=args.flow_batch_size)
 
             m = 1
             x_init_kr = data_flow_kr.get_n_batch_from_shuffled_batched_dataset(m)
@@ -346,7 +338,6 @@ class DAS():
             self.net_u(x_init_kr)
 
             solve_pde_time = 0
-            solve_flow_time = 0
             for i in range(1, max_stage+1):
 
                 solve_pde_start = time.time()
@@ -357,5 +348,3 @@ class DAS():
                     print('===== stoppping criterion satisfies, finish training =====')
                     break
             print('solve_pde_time is {:.4} hours'.format(solve_pde_time))
-            print('solve_flow_time time is {:.8} hours'.format(solve_flow_time))
-
